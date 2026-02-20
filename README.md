@@ -5,22 +5,24 @@ Built with Python, ttkbootstrap, and SQLite.
 
 🚀 Features
 
-Manage multiple projects with an organized dashboard
+Manage multiple projects with a clean dashboard
 
 Track workers, importers, and customer payments
 
-Arabic right-to-left interface
+Arabic interface (Right-to-Left layout)
 
 Local SQLite database (data.db)
 
-Export data to Excel and create database backups
+Export data to Excel
+
+Create automatic backups of the database
 
 ⚙️ Installation
 
 Clone the repository:
 
-git clone https://github.com/yourusername/projects-manager.git
-cd projects-manager
+git clone https://github.com/ahmedtamerali/Engineer-projects-manager.git
+cd Engineer-projects-manager
 
 Install dependencies:
 
@@ -30,20 +32,33 @@ python -m pip install -r requirements.txt
 Run the application:
 
 python main.py
-🧩 Notes
+🧩 Project Structure
+Engineer-projects-manager/
+│
+├── main.py                  # App entry point
+├── requirements.txt         # Dependencies
+├── data.db                  # Local SQLite database
+│
+├── ui/                      # User interface components
+│   ├── main_window.py
+│   └── project_window.py
+│
+├── db/                      # Database logic
+│   └── db.py
+│
+└── utils/                   # Helper utilities (validation, etc.)
+🧠 Notes
 
-Interface language: Arabic (Right-to-Left)
+Interface language: Arabic (RTL)
 
-Database file: data.db (created automatically in the working directory)
+Database file: data.db (auto-created in working directory)
 
-Works fully offline
+Works completely offline
 
-📷 Preview
 
-Add a screenshot here (optional):
+👨‍💻 Developer
 
-![App Screenshot](screenshot.png)
-🧑‍💻 Developer
+Ahmed Tamer
+Created to simplify and organize project payment management.
 
-Eng. Abdelrahman
-Created for efficient and local project payment management.
+📦 GitHub Repository → Engineer-projects-manager
