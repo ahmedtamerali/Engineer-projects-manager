@@ -3,3 +3,4 @@ chart_finance_economy_project_management_business_icon_263048.ico
 .venv
 test_importer_changes.*
 *projects_export_*
+__pycache__
