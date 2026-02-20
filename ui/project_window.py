@@ -26,7 +26,7 @@ class AutocompleteDialog:
         self.dialog.title(title)
         self.dialog.transient(parent)
         self.dialog.grab_set()
-        self.dialog.geometry('400x250')
+        self.dialog.geometry('400x350')
         self.dialog.resizable(False, False)
         
         from tkinter import Frame, Button
@@ -65,7 +65,7 @@ class AutocompleteDialog:
         
         # Buttons frame
         btn_frame = Frame(main_frame, bg='#2b2b2b')
-        btn_frame.pack(pady=8, fill='x', expand=True)
+        btn_frame.pack(pady=8, fill='x')
         
         ok_btn = Button(btn_frame, text='موافق', command=self.on_ok, 
                        bg='#28a745', fg='white', font=('Segoe UI', 9), 
@@ -279,6 +279,7 @@ class ProjectWindow:
         self.imp_tree.pack(fill='both', expand=False, padx=6, pady=6)
         self.imp_tree.bind('<Button-3>', self.on_importer_right)
         self.imp_tree.bind('<<TreeviewSelect>>', self.on_importer_select)
+        self.imp_tree.tag_configure('good', foreground='green')
 
         self.imp_assign_tree = tb.Treeview(self.imp_frame, columns=('description', 'amount', 'date'), show='headings', height=6)
         self.imp_assign_tree.heading('description', text='وصف العمل', anchor='e')
@@ -397,8 +398,8 @@ class ProjectWindow:
                     good_paid += sum(p['amount'] for p in payments)
                 good_remaining = good_assigned - good_paid
                 
-                good_summary = f'مُخصّص:{good_assigned:.2f}  المدفوع:{good_paid:.2f}  المتبقي:{good_remaining:.2f}'
-                good_id = self.imp_tree.insert(f'imp_{importer_id}', 'end', values=(good_summary, good_name), tags=('good',))
+                good_summary = f'    مُخصّص:{good_assigned:.2f}  المدفوع:{good_paid:.2f}  المتبقي:{good_remaining:.2f}'
+                good_id = self.imp_tree.insert(f'imp_{importer_id}', 'end', values=(good_summary, '    ' + good_name), tags=('good',))
                 
                 # Store good info for later use
                 setattr(self, f'_good_{good_id}', {'importer_id': importer_id, 'good_name': good_name})
@@ -799,14 +800,11 @@ class ProjectWindow:
                 return
             amt_v = validate_amount(amt)
             
-            # Ask for description
-            desc = simpledialog.askstring('وصف العمل', 'وصف العمل المنجز:', parent=self.win)
-            
             from datetime import datetime
             date_v = datetime.now().strftime('%d-%m-%Y')
             
-            # Add assignment with good
-            self.db.add_assignment('importer', importer_id, amt_v, date_v, desc or '', good=good_name)
+            # Add assignment with good (using good_name as description)
+            self.db.add_assignment('importer', importer_id, amt_v, date_v, good_name, good=good_name)
             
             # Reload importers to update goods and totals
             self.load_importers()
