@@ -158,7 +158,7 @@ class ProjectWindow:
             self.win.title(f'تفاصيل المشروع: {project_name}')
         else:
             self.win.title('تفاصيل المشروع')
-        self.win.geometry('820x560')
+        self.win.geometry('900x640')
         self.selected_worker = None
         self.selected_importer = None
         self._build_ui()
@@ -271,10 +271,10 @@ class ProjectWindow:
         add_i = tb.Button(imp_top, text='إضافة مورد', bootstyle='success', command=self.add_importer)
         add_i.pack(side=LEFT, padx=6, pady=6)
 
-        self.imp_tree = tb.Treeview(self.imp_frame, columns=('job','name'), show='headings', height=8)
-        self.imp_tree.heading('job', text='السلعة/الوظيفة', anchor='e')
-        self.imp_tree.heading('name', text='الاسم', anchor='e')
-        self.imp_tree.column('job', anchor='e', width=160)
+        self.imp_tree = tb.Treeview(self.imp_frame, columns=('detail','name'), show='headings', height=8)
+        self.imp_tree.heading('detail', text='الملخص المالي', anchor='e')
+        self.imp_tree.heading('name', text='الاسم/السلعة', anchor='e')
+        self.imp_tree.column('detail', anchor='e', width=250)
         self.imp_tree.column('name', anchor='e')
         self.imp_tree.pack(fill='both', expand=False, padx=6, pady=6)
         self.imp_tree.bind('<Button-3>', self.on_importer_right)
@@ -354,11 +354,57 @@ class ProjectWindow:
             self.workers_tree.insert('', 'end', iid=w['id'], values=(w.get('job') or '', w['name']))
 
     def load_importers(self):
+        """Load importers with hierarchical structure: importer name (parent) -> goods (children)"""
         for i in self.imp_tree.get_children():
             self.imp_tree.delete(i)
+        
         imps = self.db.get_importers_by_project(self.project_id)
+        
         for it in imps:
-            self.imp_tree.insert('', 'end', iid=it['id'], values=(it.get('job') or '', it['name']))
+            importer_id = it['id']
+            importer_name = it['name']
+            
+            # Calculate totals for this importer across all goods
+            assigns = self.db.get_assignments('importer', importer_id)
+            total_assigned = sum(a['amount'] for a in assigns)
+            
+            # Calculate total paid for this importer
+            total_paid = 0
+            for a in assigns:
+                payments = self.db.get_payments(a['id'])
+                total_paid += sum(p['amount'] for p in payments)
+            
+            total_remaining = total_assigned - total_paid
+            
+            # Insert importer as parent row with totals in detail column
+            summary_text = f'مُخصّص:{total_assigned:.2f}  المدفوع:{total_paid:.2f}  المتبقي:{total_remaining:.2f}'
+            parent_id = self.imp_tree.insert('', 'end', iid=f'imp_{importer_id}', values=(summary_text, importer_name), tags=('parent',))
+            
+            # Get all unique goods for this importer
+            goods_dict = {}  # good_name -> list of assignments
+            for a in assigns:
+                good_name = a.get('good') or 'بدون تصنيف'
+                if good_name not in goods_dict:
+                    goods_dict[good_name] = []
+                goods_dict[good_name].append(a)
+            
+            # Insert goods as child rows
+            for good_name, assignments in sorted(goods_dict.items()):
+                good_assigned = sum(a['amount'] for a in assignments)
+                good_paid = 0
+                for a in assignments:
+                    payments = self.db.get_payments(a['id'])
+                    good_paid += sum(p['amount'] for p in payments)
+                good_remaining = good_assigned - good_paid
+                
+                good_summary = f'مُخصّص:{good_assigned:.2f}  المدفوع:{good_paid:.2f}  المتبقي:{good_remaining:.2f}'
+                good_id = self.imp_tree.insert(f'imp_{importer_id}', 'end', values=(good_summary, good_name), tags=('good',))
+                
+                # Store good info for later use
+                setattr(self, f'_good_{good_id}', {'importer_id': importer_id, 'good_name': good_name})
+        
+        # Auto-expand all parent rows
+        self.expand_all_rows(self.imp_tree)
 
     def load_customer(self):
         # calculate summary for customer only
@@ -519,6 +565,26 @@ class ProjectWindow:
         # Auto-expand all parent rows
         self.expand_all_rows(tree)
 
+    def load_assignments_for_good(self, importer_id, good_name):
+        """Load assignments for a specific good from a specific importer"""
+        tree = self.imp_assign_tree
+        for i in tree.get_children():
+            tree.delete(i)
+        
+        # Get all assignments for this importer
+        assigns = self.db.get_assignments('importer', importer_id)
+        
+        # Filter by good name
+        for a in assigns:
+            if (a.get('good') or 'بدون تصنيف') == good_name:
+                tree.insert('', 'end', iid=f"a{a['id']}", values=(a.get('description') or '', f"{a['amount']:.2f}", a['date']))
+                pays = self.db.get_payments(a['id'])
+                for p in pays:
+                    tree.insert(f"a{a['id']}", 'end', iid=f"p{p['id']}", values=('', f"{p['amount']:.2f}", p['date']), tags=('paid',))
+        
+        # Auto-expand all parent rows
+        self.expand_all_rows(tree)
+
     def add_assignment_for_worker(self):
         sel = self.workers_tree.selection()
         if not sel:
@@ -562,48 +628,32 @@ class ProjectWindow:
             if not name:
                 return
             
-            # Check if this importer+job combination already exists in this project
+            # Check if this importer already exists in this project
             importers_in_project = self.db.get_importers_by_project(self.project_id)
             
-            # Ask for job/item (required)
-            existing_jobs = self.db.get_unique_jobs_for_importer(name)
-            
-            job_dialog = AutocompleteDialog(
-                self.win, 
-                'اختر السلعة/الوظيفة', 
-                'السلعة/الوظيفة:',
-                existing_jobs,
-                auto_select=True,
-                is_job=True
-            )
-            job = job_dialog.result_name
-            if not job:
+            if any(i['name'] == name for i in importers_in_project):
+                messagebox.showerror('خطأ', 'هذا المورد موجود بالفعل في هذا المشروع!', parent=self.win)
                 return
             
-            # Check if importer+job combination already exists in this project
-            if any(i['name'] == name and i.get('job') == job for i in importers_in_project):
-                messagebox.showerror('خطأ', 'هذا المورد مع هذه السلعة موجود بالفعل في هذا المشروع!', parent=self.win)
-                return
-            
-            # Check if importer+job exists in other projects
-            existing_importer_ids = self.db.get_importer_ids_by_name_and_job(name, job)
+            # Check if importer exists in other projects
+            existing_importer_ids = self.db.get_importer_ids_by_name(name)
             
             if existing_importer_ids:
-                # Importer with same job exists in another project - ask user if they want to link it
+                # Importer exists in another project - ask user if they want to link it
                 response = messagebox.askyesno(
                     'مورد موجود',
-                    f'هذا المورد "{name}" مع السلعة "{job}"\nموجود بالفعل في مشروع آخر.\n\nهل تريد إضافتـــه إلى هذا المشروع أيضاً؟',
+                    f'هذا المورد "{name}"\nموجود بالفعل في مشروع آخر.\n\nهل تريد إضافتـــه إلى هذا المشروع أيضاً؟',
                     parent=self.win
                 )
                 
                 if response:
                     # Add the existing importer to this project
-                    iid = self.db.add_importer_with_job(self.project_id, name, job)
+                    iid = self.db.add_importer(self.project_id, name)
                 else:
                     return
             else:
-                # New importer+job combination
-                iid = self.db.add_importer_with_job(self.project_id, name, job)
+                # New importer
+                iid = self.db.add_importer(self.project_id, name)
             
             self.load_importers()
             if self.on_update_callback:
@@ -615,15 +665,25 @@ class ProjectWindow:
         iid = self.imp_tree.identify_row(event.y)
         if not iid:
             return
-        menu = tb.Menu(self.win, tearoff=0)
-        menu.add_command(label='تعديل الاسم', command=lambda: self.edit_importer(iid))
-        menu.add_command(label='حذف', command=lambda: self.delete_importer(iid))
-        menu.tk_popup(event.x_root, event.y_root)
+        
+        # Check if this is an importer row or a good row
+        if iid.startswith('imp_'):
+            # This is an importer row - allow edit and delete
+            menu = tb.Menu(self.win, tearoff=0)
+            menu.add_command(label='تعديل الاسم', command=lambda: self.edit_importer(iid))
+            menu.add_command(label='حذف', command=lambda: self.delete_importer(iid))
+            menu.tk_popup(event.x_root, event.y_root)
+        else:
+            # This is a good row - no context menu for now
+            pass
 
-    def edit_importer(self, importer_id):
+    def edit_importer(self, tree_iid):
         try:
+            # Extract importer_id from tree node ID (format: 'imp_<id>')
+            importer_id = int(tree_iid.replace('imp_', ''))
+            
             cur = self.db.get_importers_by_project(self.project_id)
-            w = next((x for x in cur if x['id'] == int(importer_id)), None)
+            w = next((x for x in cur if x['id'] == importer_id), None)
             if not w:
                 return
             name = self.ask_string_focused('تعديل المورد', 'الاسم:', initialvalue=w['name'])
@@ -635,9 +695,12 @@ class ProjectWindow:
         except Exception:
             messagebox.showerror('خطأ', 'حدث خطأ أثناء الاتصال بقاعدة البيانات.', parent=self.win)
 
-    def delete_importer(self, importer_id):
+    def delete_importer(self, tree_iid):
         if messagebox.askyesno('تأكيد', 'حذف المورد؟', parent=self.win):
             try:
+                # Extract importer_id from tree node ID (format: 'imp_<id>')
+                importer_id = int(tree_iid.replace('imp_', ''))
+                
                 # Delete all assignments and payments for this importer
                 assigns = self.db.get_assignments('importer', importer_id)
                 for a in assigns:
@@ -664,27 +727,90 @@ class ProjectWindow:
         if not sel:
             self.selected_importer = None
             return
+        
         iid = sel[0]
-        self.selected_importer = iid
-        self.load_assignments_for('importer', int(iid))
+        
+        # Check if this is an importer row or a good row
+        if iid.startswith('imp_'):
+            # Importer row selected - show all assignments for this importer
+            importer_id = int(iid.replace('imp_', ''))
+            self.selected_importer = importer_id
+            self.load_assignments_for('importer', importer_id)
+        else:
+            # Good row selected - show assignments for this good only
+            # Need to extract importer_id and good_name from the selected good row
+            good_info = getattr(self, f'_good_{iid}', None)
+            if good_info:
+                self.load_assignments_for_good(good_info['importer_id'], good_info['good_name'])
+            else:
+                # Fallback to loading all assignments if we can't find good info
+                parent = self.imp_tree.parent(iid)
+                if parent.startswith('imp_'):
+                    importer_id = int(parent.replace('imp_', ''))
+                    self.selected_importer = importer_id
+                    self.load_assignments_for('importer', importer_id)
 
     def add_assignment_for_importer(self):
         sel = self.imp_tree.selection()
         if not sel:
-            messagebox.showwarning('تنبيه', 'اختر مورد أولاً', parent=self.win)
+            messagebox.showwarning('تنبيه', 'اختر مورد أو سلعة أولاً', parent=self.win)
             return
-        iid = int(sel[0])
+        
+        iid = sel[0]
+        
+        # Determine if importer or good is selected
+        if iid.startswith('imp_'):
+            # Importer row selected
+            importer_id = int(iid.replace('imp_', ''))
+        else:
+            # Good row selected - extract importer_id from parent
+            good_info = getattr(self, f'_good_{iid}', None)
+            if good_info:
+                importer_id = good_info['importer_id']
+            else:
+                parent = self.imp_tree.parent(iid)
+                if parent.startswith('imp_'):
+                    importer_id = int(parent.replace('imp_', ''))
+                else:
+                    messagebox.showwarning('خطأ', 'لم يتمكن من تحديد المورد', parent=self.win)
+                    return
+        
         try:
+            # Ask for good name - suggest existing goods for this importer
+            existing_goods = self.db.get_unique_goods_for_importer(
+                next((i['name'] for i in self.db.get_importers_by_project(self.project_id) if i['id'] == importer_id), '')
+            )
+            
+            good_dialog = AutocompleteDialog(
+                self.win,
+                'اختر السلعة',
+                'السلعة:',
+                existing_goods,
+                auto_select=True
+            )
+            
+            good_name = good_dialog.result_name
+            if not good_name:
+                return
+            
+            # Ask for amount
             amt = simpledialog.askstring('مبلغ مخصص', 'المبلغ:', parent=self.win)
             if not amt:
                 return
             amt_v = validate_amount(amt)
+            
+            # Ask for description
             desc = simpledialog.askstring('وصف العمل', 'وصف العمل المنجز:', parent=self.win)
+            
             from datetime import datetime
             date_v = datetime.now().strftime('%d-%m-%Y')
-            self.db.add_assignment('importer', iid, amt_v, date_v, desc or '')
-            # Reload assignments for this importer immediately
-            self.load_assignments_for('importer', iid)
+            
+            # Add assignment with good
+            self.db.add_assignment('importer', importer_id, amt_v, date_v, desc or '', good=good_name)
+            
+            # Reload importers to update goods and totals
+            self.load_importers()
+            
             # Also reload customer summary
             self.load_customer()
             if self.on_update_callback:
@@ -947,32 +1073,45 @@ class WorkerDetailWindow:
         for item in self.tree.get_children():
             self.tree.delete(item)
         
-        assignments = self.db.get_assignments(self.entity_type, self.entity_id)
+        # Collect assignments from all entity IDs (worker/importer can be in multiple projects)
+        all_assignments = []
+        for entity_id in self.entity_ids:
+            assignments = self.db.get_assignments(self.entity_type, entity_id)
+            all_assignments.extend(assignments)
         
         # Group by project_id
         from collections import defaultdict
         by_project = defaultdict(list)
         
-        for a in assignments:
+        for a in all_assignments:
             # Get project info for this assignment
             cur = self.db.conn.cursor()
             # The assignment doesn't directly have project_id, so we get it from worker/importer
-            if self.entity_type == 'worker':
-                cur.execute('SELECT project_id FROM workers WHERE id=?', (self.entity_id,))
-            else:
-                cur.execute('SELECT project_id FROM importers WHERE id=?', (self.entity_id,))
+            # We need to find which entity_id this assignment belongs to
+            entity_id = None
+            for eid in self.entity_ids:
+                assigns = self.db.get_assignments(self.entity_type, eid)
+                if any(assign['id'] == a['id'] for assign in assigns):
+                    entity_id = eid
+                    break
             
-            row = cur.fetchone()
-            project_id = row['project_id'] if row else None
-            
-            if project_id:
-                # Get project name
-                proj = next((p for p in self.db.get_all_projects() if p['id'] == project_id), None)
-                proj_name = proj['name'] if proj else f'Unknown (ID: {project_id})'
-                by_project[project_id].append({
-                    'project_name': proj_name,
-                    'assignment': a
-                })
+            if entity_id:
+                if self.entity_type == 'worker':
+                    cur.execute('SELECT project_id FROM workers WHERE id=?', (entity_id,))
+                else:
+                    cur.execute('SELECT project_id FROM importers WHERE id=?', (entity_id,))
+                
+                row = cur.fetchone()
+                project_id = row['project_id'] if row else None
+                
+                if project_id:
+                    # Get project name
+                    proj = next((p for p in self.db.get_all_projects() if p['id'] == project_id), None)
+                    proj_name = proj['name'] if proj else f'Unknown (ID: {project_id})'
+                    by_project[project_id].append({
+                        'project_name': proj_name,
+                        'assignment': a
+                    })
         
         # Display by project
         for project_id in sorted(by_project.keys(), key=lambda x: by_project[x][0]['project_name']):

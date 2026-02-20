@@ -40,7 +40,8 @@ class Database:
             entity_id INTEGER,
             amount REAL,
             date TEXT,
-            description TEXT DEFAULT ''
+            description TEXT DEFAULT '',
+            good TEXT
         );
 
         CREATE TABLE IF NOT EXISTS payments (
@@ -52,20 +53,18 @@ class Database:
         );
         ''')
         self.conn.commit()
-        # Ensure optional columns exist (job for workers/importers)
+        # Ensure optional columns exist (job for workers only)
         cur.execute("PRAGMA table_info(workers)")
         cols = [r[1] for r in cur.fetchall()]
         if 'job' not in cols:
             cur.execute('ALTER TABLE workers ADD COLUMN job TEXT')
-        cur.execute("PRAGMA table_info(importers)")
-        cols = [r[1] for r in cur.fetchall()]
-        if 'job' not in cols:
-            cur.execute('ALTER TABLE importers ADD COLUMN job TEXT')
-        # Add description column to assignments if it doesn't exist
+        # Add good column to assignments if it doesn't exist
         cur.execute("PRAGMA table_info(assignments)")
         cols = [r[1] for r in cur.fetchall()]
         if 'description' not in cols:
             cur.execute('ALTER TABLE assignments ADD COLUMN description TEXT DEFAULT ""')
+        if 'good' not in cols:
+            cur.execute('ALTER TABLE assignments ADD COLUMN good TEXT')
         self.conn.commit()
 
     # Projects
@@ -119,16 +118,15 @@ class Database:
         return [dict(r) for r in cur.fetchall()]
 
     def add_importer(self, project_id, name):
+        """Add importer with only name (job is now tracked in assignments)"""
         cur = self.conn.cursor()
         cur.execute('INSERT INTO importers(project_id, name) VALUES(?,?)', (project_id, name))
         self.conn.commit()
         return cur.lastrowid
 
     def add_importer_with_job(self, project_id, name, job=None):
-        cur = self.conn.cursor()
-        cur.execute('INSERT INTO importers(project_id, name, job) VALUES(?,?,?)', (project_id, name, job))
-        self.conn.commit()
-        return cur.lastrowid
+        """Backwards compatible method - job parameter is ignored, use add_importer instead"""
+        return self.add_importer(project_id, name)
 
     def edit_importer(self, importer_id, new_name):
         cur = self.conn.cursor()
@@ -146,10 +144,10 @@ class Database:
         return [dict(r) for r in cur.fetchall()]
 
     # Assignments
-    def add_assignment(self, entity_type, entity_id, amount, date, description=''):
+    def add_assignment(self, entity_type, entity_id, amount, date, description='', good=None):
         cur = self.conn.cursor()
-        cur.execute('INSERT INTO assignments(entity_type, entity_id, amount, date, description) VALUES(?,?,?,?,?)',
-                    (entity_type, entity_id, amount, date, description))
+        cur.execute('INSERT INTO assignments(entity_type, entity_id, amount, date, description, good) VALUES(?,?,?,?,?,?)',
+                    (entity_type, entity_id, amount, date, description, good))
         self.conn.commit()
         aid = cur.lastrowid
         # recalc affected project(s)
@@ -453,31 +451,53 @@ class Database:
         cur.execute('SELECT DISTINCT name FROM importers ORDER BY name')
         return [r['name'] for r in cur.fetchall()]
 
-    def get_unique_jobs_for_importer(self, importer_name):
-        """Get all unique jobs for a specific importer name across all projects"""
+    def get_unique_goods_for_importer(self, importer_name):
+        """Get all unique goods for a specific importer name across all projects"""
         cur = self.conn.cursor()
-        cur.execute('SELECT DISTINCT job FROM importers WHERE name=? ORDER BY job', (importer_name,))
-        return [r['job'] for r in cur.fetchall()]
+        cur.execute('''
+            SELECT DISTINCT a.good FROM assignments a
+            JOIN importers i ON a.entity_id = i.id
+            WHERE i.name=? AND a.entity_type='importer' AND a.good IS NOT NULL
+            ORDER BY a.good
+        ''', (importer_name,))
+        return [r['good'] for r in cur.fetchall()]
 
-    def get_all_jobs_importers(self):
-        """Get all unique jobs across all importers"""
+    def get_all_goods_importers(self):
+        """Get all unique goods across all importer assignments"""
         cur = self.conn.cursor()
-        cur.execute('SELECT DISTINCT job FROM importers WHERE job IS NOT NULL ORDER BY job')
-        return [r['job'] for r in cur.fetchall()]
+        cur.execute('''
+            SELECT DISTINCT good FROM assignments 
+            WHERE entity_type='importer' AND good IS NOT NULL 
+            ORDER BY good
+        ''')
+        return [r['good'] for r in cur.fetchall()]
 
-    def get_importer_ids_by_name_and_job(self, name, job):
-        """Get all importer IDs with the given name and job (could be in multiple projects)"""
+    def get_importer_id_by_name(self, name, project_id=None):
+        """Get importer ID by name (optionally in specific project)"""
         cur = self.conn.cursor()
-        cur.execute('SELECT id FROM importers WHERE name=? AND job=?', (name, job))
+        if project_id:
+            cur.execute('SELECT id FROM importers WHERE name=? AND project_id=?', (name, project_id))
+        else:
+            cur.execute('SELECT id FROM importers WHERE name=?', (name,))
+        return cur.fetchone()['id'] if cur.fetchone() else None
+
+    def get_importer_ids_by_name(self, name):
+        """Get all importer IDs with the given name (could be in multiple projects)"""
+        cur = self.conn.cursor()
+        cur.execute('SELECT id FROM importers WHERE name=?', (name,))
         return [r['id'] for r in cur.fetchall()]
 
+    def get_importer_ids_by_name_and_job(self, name, job):
+        """DEPRECATED: Use get_importer_ids_by_name instead. Kept for backwards compatibility."""
+        return self.get_importer_ids_by_name(name)
+
     def get_all_importers_with_totals(self):
-        """Get all unique importers (by name+job combination) across all projects with combined totals"""
+        """Get all unique importers (by name) across all projects with combined totals and their goods"""
         cur = self.conn.cursor()
-        # Get all unique (name, job) combinations
+        # Get all unique importer names
         cur.execute('''
-            SELECT DISTINCT name, job FROM importers
-            ORDER BY name, job
+            SELECT DISTINCT name FROM importers
+            ORDER BY name
         ''')
         
         importer_groups = cur.fetchall()
@@ -485,10 +505,9 @@ class Database:
         
         for group in importer_groups:
             name = group['name']
-            job = group['job']
             
-            # Find all importer IDs with this name+job combination
-            cur.execute('SELECT id, project_id FROM importers WHERE name=? AND job=?', (name, job))
+            # Find all importer IDs with this name (across all projects)
+            cur.execute('SELECT id, project_id FROM importers WHERE name=?', (name,))
             importer_records = [dict(r) for r in cur.fetchall()]
             
             if not importer_records:
@@ -504,7 +523,16 @@ class Database:
                     if proj_row:
                         projects.append({'id': proj_id, 'name': proj_row['name']})
             
-            # Calculate combined totals for all instances of this importer+job
+            # Get all unique goods used by this importer (across all instances/projects)
+            cur.execute('''
+                SELECT DISTINCT good FROM assignments a
+                JOIN importers i ON a.entity_id = i.id
+                WHERE i.name=? AND a.entity_type='importer' AND a.good IS NOT NULL
+                ORDER BY a.good
+            ''', (name,))
+            goods = [r['good'] for r in cur.fetchall()]
+            
+            # Calculate combined totals for all instances of this importer
             total_assigned = 0
             total_paid = 0
             
@@ -527,7 +555,7 @@ class Database:
             
             importers.append({
                 'name': name,
-                'job': job,
+                'goods': goods,
                 'projects': projects,
                 'importer_ids': [ir['id'] for ir in importer_records],
                 'total_assigned': float(total_assigned),

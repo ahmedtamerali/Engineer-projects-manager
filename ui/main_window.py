@@ -219,16 +219,19 @@ class MainWindow:
                 frame = tb.Frame(self.cards_frame, padding=12, relief='raised', bootstyle='warning')
                 frame.grid(row=r, column=c, padx=8, pady=8, sticky='nsew')
 
-                # Name with job type
-                name_text = f"{imp['name']}"
-                if imp['job']:
-                    name_text += f" ({imp['job']})"
-                name = tb.Label(frame, text=name_text, font=('Segoe UI', 11, 'bold'), anchor='e')
+                # Name (no job field anymore)
+                name = tb.Label(frame, text=imp['name'], font=('Segoe UI', 11, 'bold'), anchor='e')
                 name.pack(fill='x')
                 
                 # Type label
                 type_label = tb.Label(frame, text='مورد', font=('Segoe UI', 9), anchor='e', foreground='gray')
                 type_label.pack(fill='x')
+
+                # Goods list (replaces job)
+                if imp['goods']:
+                    goods_text = ', '.join(imp['goods'])
+                    goods_label = tb.Label(frame, text=f'السلع: {goods_text}', font=('Segoe UI', 8), anchor='e', foreground='gray')
+                    goods_label.pack(fill='x')
 
                 # Projects list
                 if imp['projects']:
@@ -252,8 +255,9 @@ class MainWindow:
                 if c >= cols:
                     c = 0
                     r += 1
-        except Exception:
-            pass
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
         
         # Configure all rows to expand equally and fill available space
         for i in range(r + 1):
@@ -446,7 +450,7 @@ class MainWindow:
                             total_paid += sum(p['amount'] for p in pays)
                         
                         ws[f'D{current_row}'] = importer['name']
-                        ws[f'C{current_row}'] = importer.get('job') or ''
+                        ws[f'C{current_row}'] = ', '.join(importer.get('goods', [])) if importer.get('goods') else ''
                         ws[f'B{current_row}'] = total_assigned
                         ws[f'A{current_row}'] = total_paid
                         current_row += 1
