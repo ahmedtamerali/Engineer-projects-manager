@@ -421,11 +421,11 @@ class ProjectWindow:
             self.cust_assign_tree.delete(i)
         assigns = self.db.get_assignments('customer', self.project_id)
         for a in assigns:
-            self.cust_assign_tree.insert('', 'end', iid=f"a{a['id']}", values=(f"{a['amount']:.2f}", a['date']))
+            self.cust_assign_tree.insert('', 'end', iid=f"a{a['id']}", values=(a.get('description') or '', f"{a['amount']:.2f}", a['date']))
             # add payments as children
             pays = self.db.get_payments(a['id'])
             for p in pays:
-                self.cust_assign_tree.insert(f"a{a['id']}", 'end', iid=f"p{p['id']}", values=(f"{p['amount']:.2f}", p['date']), tags=('paid',))
+                self.cust_assign_tree.insert(f"a{a['id']}", 'end', iid=f"p{p['id']}", values=('', f"{p['amount']:.2f}", p['date']), tags=('paid',))
         # Auto-expand all parent rows
         self.expand_all_rows(self.cust_assign_tree)
 
